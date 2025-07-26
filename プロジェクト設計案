@@ -1,0 +1,82 @@
+whisper-claude-transcription/
+├── backend/                    # Pythonバックエンド
+│   ├── core/                   # コア機能
+│   │   ├── __init__.py
+│   │   ├── claude_integration.py    # Claude API関連
+│   │   ├── whisper_processor.py     # Whisper音声処理
+│   │   ├── text_validator.py        # 入力検証
+│   │   └── learning_system.py       # 自己学習機能
+│   │
+│   ├── api/                    # Web API
+│   │   ├── __init__.py
+│   │   ├── main.py             # FastAPI メインアプリ
+│   │   ├── routes/             # APIルート
+│   │   │   ├── __init__.py
+│   │   │   ├── transcription.py
+│   │   │   ├── files.py
+│   │   │   └── settings.py
+│   │   └── models/             # データモデル
+│   │       ├── __init__.py
+│   │       ├── transcription.py
+│   │       └── user_settings.py
+│   │
+│   ├── storage/                # データ保存
+│   │   ├── __init__.py
+│   │   ├── database.py         # データベース操作
+│   │   ├── file_manager.py     # ファイル管理
+│   │   └── api_key_manager.py  # APIキー管理
+│   │
+│   ├── utils/                  # ユーティリティ
+│   │   ├── __init__.py
+│   │   ├── youtube_downloader.py
+│   │   ├── audio_converter.py
+│   │   └── category_classifier.py
+│   │
+│   ├── cli/                    # コマンドライン版
+│   │   ├── __init__.py
+│   │   └── main.py             # 現在のCLI機能
+│   │
+│   ├── config/                 # 設定
+│   │   ├── __init__.py
+│   │   ├── settings.py
+│   │   └── categories.py
+│   │
+│   └── requirements.txt        # Python依存関係
+│
+├── frontend/                   # Webフロントエンド
+│   ├── public/
+│   ├── src/
+│   │   ├── components/         # Reactコンポーネント
+│   │   │   ├── FileUpload.jsx
+│   │   │   ├── TranscriptionResult.jsx
+│   │   │   ├── Settings.jsx
+│   │   │   └── Dashboard.jsx
+│   │   ├── pages/              # ページ
+│   │   │   ├── Home.jsx
+│   │   │   ├── Transcription.jsx
+│   │   │   └── History.jsx
+│   │   ├── hooks/              # カスタムフック
+│   │   ├── utils/              # ユーティリティ
+│   │   └── styles/             # スタイル
+│   ├── package.json
+│   └── vite.config.js
+│
+├── docker/                     # Docker設定
+│   ├── Dockerfile.backend
+│   ├── Dockerfile.frontend
+│   └── docker-compose.yml
+│
+├── docs/                       # ドキュメント
+│   ├── api.md
+│   ├── setup.md
+│   └── deployment.md
+│
+├── scripts/                    # デプロイ・管理スクリプト
+│   ├── setup.sh
+│   ├── deploy.sh
+│   └── backup.sh
+│
+├── .gitignore
+├── README.md
+├── LICENSE
+└── docker-compose.yml

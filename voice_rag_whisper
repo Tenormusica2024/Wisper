@@ -1,0 +1,582 @@
+import os
+import warnings
+import json
+from datetime import datetime
+from pathlib import Path
+import tempfile
+import subprocess
+
+# 必要なライブラリのインポート（transformersを除外）
+try:
+    import whisper
+    import yt_dlp
+    import numpy as np
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.metrics.pairwise import cosine_similarity
+    from sentence_transformers import SentenceTransformer
+    print("✅ 全ライブラリ読み込み完了")
+except ImportError as e:
+    print(f"必要なライブラリが不足しています: {e}")
+    print("\n以下のコマンドでインストールしてください:")
+    print("pip install openai-whisper yt-dlp scikit-learn sentence-transformers torch")
+    exit(1)
+
+warnings.filterwarnings("ignore")
+
+class VoiceRAGSystem:
+    def __init__(self, db_path="voice_rag_db.json", output_folder="D:\\Python\\Whisper"):
+        """
+        音声RAGシステムの初期化
+        """
+        print("システム初期化中...")
+        
+        self.db_path = db_path
+        self.output_folder = output_folder
+        self.whisper_model = None
+        self.sentence_model = None
+        self.vectorizer = TfidfVectorizer(max_features=1000, stop_words='english')
+        self.database = self.load_database()
+        
+        # カテゴリとフォルダの対応
+        self.category_folders = {
+            'ビジネス・経営': 'business',
+            '技術・プログラミング': 'technology', 
+            '教育・学習': 'education',
+            'エンターテイメント': 'entertainment',
+            '日常・ライフスタイル': 'lifestyle',
+            'ニュース・時事': 'news',
+            '健康・医療': 'health',
+            '料理・グルメ': 'cooking',
+            '旅行・観光': 'travel',
+            'スポーツ・フィットネス': 'sports',
+            '音楽・アート': 'music_art',
+            'ゲーム': 'gaming',
+            '科学・研究': 'science',
+            '政治・社会': 'politics',
+            'その他': 'others'
+        }
+        
+        # フォルダを作成
+        self.create_category_folders()
+        
+        # カテゴリ分類用のキーワード辞書
+        self.category_keywords = {
+            'ビジネス・経営': ['会議', '売上', 'マーケティング', '戦略', '予算', 'プロジェクト', '顧客', '営業', '経営', '投資', '起業'],
+            '技術・プログラミング': ['プログラミング', 'AI', 'システム', 'データベース', 'アルゴリズム', 'API', 'クラウド', 'アプリ', 'ソフトウェア', 'ショートカット', 'パソコン', 'コンピュータ'],
+            '教育・学習': ['学習', '授業', '講義', '試験', '研究', '論文', '学生', '教育', '勉強', '資格', '大学'],
+            'エンターテイメント': ['映画', '音楽', 'ゲーム', 'アニメ', '芸能', '娯楽', 'ドラマ', 'バラエティ', 'コメディ', 'ちいかわ', 'キャラクター'],
+            '日常・ライフスタイル': ['家族', '友人', '買い物', '生活', '趣味', 'ファッション', '美容', 'インテリア'],
+            'ニュース・時事': ['政治', '経済', '社会', '国際', '事件', '災害', '政府', 'ニュース', '報道'],
+            '健康・医療': ['健康', '医療', '病気', '治療', '薬', 'ダイエット', 'フィットネス', '栄養', '予防'],
+            '料理・グルメ': ['料理', 'レシピ', '食材', 'グルメ', 'レストラン', '食事', '調理', 'おいしい', 'あげ玉', 'そうめん'],
+            '旅行・観光': ['旅行', '観光', 'ホテル', '観光地', '海外', '国内', '温泉', 'リゾート'],
+            'スポーツ・フィットネス': ['スポーツ', 'フィットネス', '運動', 'トレーニング', 'ジム', '筋トレ', 'ランニング'],
+            '音楽・アート': ['音楽', 'アート', '芸術', '楽器', '絵画', 'デザイン', 'クリエイティブ'],
+            'ゲーム': ['ゲーム', 'プレイ', 'RPG', 'アクション', 'パズル', 'eスポーツ'],
+            '科学・研究': ['科学', '研究', '実験', '理論', '発見', '技術革新', '学術'],
+            '政治・社会': ['政治', '選挙', '政策', '社会問題', '法律', '制度', '改革']
+        }
+        
+        print("✅ 初期化完了")
+    
+    def create_category_folders(self):
+        """
+        カテゴリ別フォルダを作成
+        """
+        try:
+            # メインフォルダを作成
+            os.makedirs(self.output_folder, exist_ok=True)
+            
+            # カテゴリ別フォルダを作成
+            for category, folder_name in self.category_folders.items():
+                folder_path = os.path.join(self.output_folder, folder_name)
+                os.makedirs(folder_path, exist_ok=True)
+                
+                # README.txtファイルを作成してカテゴリ説明を追加
+                readme_path = os.path.join(folder_path, "README.txt")
+                if not os.path.exists(readme_path):
+                    with open(readme_path, 'w', encoding='utf-8') as f:
+                        f.write(f"カテゴリ: {category}\n")
+                        f.write(f"フォルダ: {folder_name}\n")
+                        f.write(f"作成日: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                        f.write("=" * 50 + "\n")
+                        f.write("このフォルダには以下の種類の音声データが保存されます:\n")
+                        if category in self.category_keywords:
+                            for keyword in self.category_keywords[category][:5]:
+                                f.write(f"- {keyword}関連\n")
+            
+            print(f"✅ カテゴリフォルダを作成: {self.output_folder}")
+            
+        except Exception as e:
+            print(f"❌ フォルダ作成エラー: {e}")
+    
+    def load_whisper_model(self, model_size="small"):
+        """
+        Whisperモデルの読み込み
+        """
+        print(f"Whisperモデル ({model_size}) を読み込み中...")
+        self.whisper_model = whisper.load_model(model_size)
+        print("✅ Whisperモデルの読み込み完了")
+    
+    def load_sentence_model(self):
+        """
+        文埋め込みモデルの読み込み
+        """
+        print("文埋め込みモデルを読み込み中...")
+        self.sentence_model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
+        print("✅ 文埋め込みモデルの読み込み完了")
+    
+    def classify_text(self, text):
+        """
+        キーワードベースでテキスト分類
+        """
+        text_lower = text.lower()
+        category_scores = {}
+        
+        for category, keywords in self.category_keywords.items():
+            score = 0
+            for keyword in keywords:
+                score += text_lower.count(keyword.lower())
+            category_scores[category] = score
+        
+        # 最高スコアのカテゴリを返す
+        if max(category_scores.values()) > 0:
+            return max(category_scores, key=category_scores.get)
+        else:
+            return "その他"
+    
+    def download_youtube_audio(self, url, output_path=None):
+        """
+        YouTubeから音声を取得
+        """
+        if output_path is None:
+            output_path = tempfile.mkdtemp()
+        
+        # ffmpegの存在確認
+        try:
+            subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            print("❌ エラー: ffmpegが見つかりません。")
+            return None, None
+        
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': os.path.join(output_path, '%(title)s.%(ext)s'),
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+        }
+        
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                title = info.get('title', 'unknown')
+                
+                for file in os.listdir(output_path):
+                    if file.endswith('.mp3'):
+                        return os.path.join(output_path, file), title
+                        
+        except Exception as e:
+            print(f"❌ YouTube音声取得エラー: {e}")
+            return None, None
+    
+    def transcribe_audio(self, audio_path):
+        """
+        音声をテキストに変換
+        """
+        if self.whisper_model is None:
+            self.load_whisper_model()
+        
+        print("音声をテキストに変換中...")
+        try:
+            result = self.whisper_model.transcribe(
+                audio_path, 
+                language='ja',
+                task='transcribe',
+                temperature=0.0,
+                best_of=5,
+                beam_size=5
+            )
+            return result['text']
+        except Exception as e:
+            print(f"❌ 音声変換エラー: {e}")
+            return None
+    
+    def create_embedding(self, text):
+        """
+        テキストの埋め込みベクトルを作成
+        """
+        if self.sentence_model is None:
+            self.load_sentence_model()
+        
+        return self.sentence_model.encode([text])[0].tolist()
+    
+    def save_transcript_to_file(self, title, transcript, category, source_path, source_type):
+            """
+            文字起こしをカテゴリ別フォルダに保存
+            """
+            try:
+                folder_name = self.category_folders.get(category, 'others')
+                category_folder = os.path.join(self.output_folder, folder_name)
+                
+                # フォルダが存在することを確認
+                os.makedirs(category_folder, exist_ok=True)
+                
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                # ファイル名の安全化をより厳密に
+                safe_title = ""
+                for c in title:
+                    if c.isalnum() or c in (' ', '-', '_'):
+                        safe_title += c
+                    elif c in ('/', '\\', ':', '*', '?', '"', '<', '>', '|'):
+                        safe_title += '_'
+                    else:
+                        safe_title += c
+                
+                safe_title = safe_title.strip()[:30]  # 30文字に制限
+                filename = f"{timestamp}_{safe_title}.txt"
+                file_path = os.path.join(category_folder, filename)
+                
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(f"タイトル: {title}\n")
+                    f.write(f"カテゴリ: {category}\n")
+                    f.write(f"ソース: {source_path}\n")
+                    f.write(f"ソースタイプ: {source_type}\n")
+                    f.write(f"作成日時: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write("=" * 80 + "\n\n")
+                    f.write("【文字起こし内容】\n")
+                    f.write(transcript)
+                    f.write("\n\n" + "=" * 80 + "\n")
+                    f.write(f"文字数: {len(transcript)}\n")
+                    f.write(f"単語数: {len(transcript.split())}\n")
+                
+                print(f"✅ ファイル保存完了: {file_path}")
+                return file_path
+                
+            except Exception as e:
+                print(f"❌ ファイル保存エラー: {e}")
+                # デバッグ情報を追加
+                print(f"   フォルダパス: {category_folder}")
+                print(f"   ファイル名: {filename}")
+                return None
+    
+    def add_to_database(self, source_type, source_path, title, transcript, category):
+        """
+        データベースにエントリを追加し、ファイルに保存
+        """
+        embedding = self.create_embedding(transcript)
+        
+        entry = {
+            'id': len(self.database) + 1,
+            'source_type': source_type,
+            'source_path': source_path,
+            'title': title,
+            'transcript': transcript,
+            'category': category,
+            'embedding': embedding,
+            'created_at': datetime.now().isoformat(),
+            'word_count': len(transcript.split()),
+            'char_count': len(transcript)
+        }
+        
+        self.database.append(entry)
+        self.save_database()
+        
+        # カテゴリ別フォルダにファイル保存
+        saved_file = self.save_transcript_to_file(title, transcript, category, source_path, source_type)
+        if saved_file:
+            entry['saved_file_path'] = saved_file
+            self.save_database()
+        
+        print(f"✅ データベースに追加: {title} (カテゴリ: {category})")
+        print(f"保存先フォルダ: {self.category_folders.get(category, 'others')}")
+    
+    def load_database(self):
+        """
+        データベースを読み込み
+        """
+        if os.path.exists(self.db_path):
+            try:
+                with open(self.db_path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except:
+                return []
+        return []
+    
+    def save_database(self):
+        """
+        データベースを保存
+        """
+        with open(self.db_path, 'w', encoding='utf-8') as f:
+            json.dump(self.database, f, ensure_ascii=False, indent=2)
+    
+    def search_similar(self, query, top_k=3):
+        """
+        類似検索
+        """
+        if not self.database:
+            return []
+        
+        if self.sentence_model is None:
+            self.load_sentence_model()
+        
+        query_embedding = self.sentence_model.encode([query])[0]
+        
+        similarities = []
+        for entry in self.database:
+            entry_embedding = np.array(entry['embedding'])
+            similarity = cosine_similarity([query_embedding], [entry_embedding])[0][0]
+            similarities.append((entry, similarity))
+        
+        similarities.sort(key=lambda x: x[1], reverse=True)
+        return similarities[:top_k]
+    
+    def process_youtube_url(self, url):
+        """
+        YouTube URLを処理
+        """
+        print(f"YouTube URL を処理中: {url}")
+        
+        audio_path, title = self.download_youtube_audio(url)
+        if not audio_path:
+            print("❌ YouTube音声の取得に失敗しました")
+            return False
+        
+        try:
+            transcript = self.transcribe_audio(audio_path)
+            if not transcript:
+                print("❌ 音声変換に失敗しました")
+                return False
+            
+            category = self.classify_text(transcript)
+            self.add_to_database('youtube', url, title, transcript, category)
+            
+            print(f"✅ 処理完了: {title}")
+            print(f"カテゴリ: {category}")
+            print(f"テキスト長: {len(transcript)}文字")
+            
+            return True
+            
+        finally:
+            try:
+                os.remove(audio_path)
+            except:
+                pass
+    
+    def process_audio_file(self, file_path):
+        """
+        音声ファイルを処理
+        """
+        if not os.path.exists(file_path):
+            print(f"❌ ファイルが存在しません: {file_path}")
+            return False
+        
+        print(f"音声ファイルを処理中: {file_path}")
+        
+        transcript = self.transcribe_audio(file_path)
+        if not transcript:
+            print("❌ 音声変換に失敗しました")
+            return False
+        
+        category = self.classify_text(transcript)
+        title = os.path.basename(file_path)
+        self.add_to_database('file', file_path, title, transcript, category)
+        
+        print(f"✅ 処理完了: {title}")
+        print(f"カテゴリ: {category}")
+        print(f"テキスト長: {len(transcript)}文字")
+        
+        return True
+    
+    def search_and_display(self, query):
+        """
+        検索結果を表示
+        """
+        print(f"\n検索クエリ: '{query}'")
+        print("-" * 50)
+        
+        results = self.search_similar(query)
+        
+        if not results:
+            print("検索結果がありません")
+            return
+        
+        for i, (entry, similarity) in enumerate(results, 1):
+            print(f"\n{i}. {entry['title']}")
+            print(f"   カテゴリ: {entry['category']}")
+            print(f"   類似度: {similarity:.3f}")
+            print(f"   ソース: {entry['source_type']}")
+            print(f"   作成日: {entry['created_at']}")
+            print(f"   内容抜粋: {entry['transcript'][:100]}...")
+    
+    def show_database_stats(self):
+        """
+        データベースの統計情報を表示
+        """
+        if not self.database:
+            print("データベースは空です")
+            return
+        
+        print(f"\n=== データベース統計 ===")
+        print(f"総エントリ数: {len(self.database)}")
+        
+        categories = {}
+        total_words = 0
+        
+        for entry in self.database:
+            category = entry['category']
+            categories[category] = categories.get(category, 0) + 1
+            total_words += entry['word_count']
+        
+        print(f"総単語数: {total_words:,}")
+        if len(self.database) > 0:
+            print(f"平均単語数: {total_words//len(self.database):,}")
+        
+        print("\nカテゴリ別分布:")
+        for category, count in sorted(categories.items()):
+            print(f"  {category}: {count}件")
+    
+    def show_transcript_details(self):
+        """
+        文字起こし内容の詳細表示
+        """
+        if not self.database:
+            print("データベースは空です")
+            return
+        
+        print(f"\n=== 保存されている文字起こし一覧 ===")
+        for i, entry in enumerate(self.database, 1):
+            print(f"\n{i}. {entry['title']}")
+            print(f"   カテゴリ: {entry['category']}")
+            print(f"   ソース: {entry['source_type']}")
+            print(f"   作成日: {entry['created_at']}")
+            print(f"   文字数: {len(entry['transcript'])}文字")
+        
+        try:
+            choice = int(input(f"\n詳細を見たい項目番号 (1-{len(self.database)}): "))
+            if 1 <= choice <= len(self.database):
+                entry = self.database[choice - 1]
+                print(f"\n" + "="*60)
+                print(f"タイトル: {entry['title']}")
+                print(f"カテゴリ: {entry['category']}")
+                print(f"ソース: {entry['source_path']}")
+                print(f"作成日時: {entry['created_at']}")
+                print(f"文字数: {len(entry['transcript'])}文字")
+                print(f"単語数: {entry['word_count']}語")
+                print(f"\n【文字起こし内容】")
+                print("-" * 60)
+                print(entry['transcript'])
+                print("-" * 60)
+            else:
+                print("無効な番号です")
+        except ValueError:
+            print("数字を入力してください")
+    
+    def open_category_folder(self):
+        """
+        カテゴリ別フォルダを開く
+        """
+        print(f"\n=== カテゴリ別フォルダ ===")
+        print(f"メインフォルダ: {self.output_folder}")
+        
+        categories = list(self.category_folders.keys())
+        for i, category in enumerate(categories, 1):
+            folder_name = self.category_folders[category]
+            folder_path = os.path.join(self.output_folder, folder_name)
+            file_count = len([f for f in os.listdir(folder_path) if f.endswith('.txt')]) if os.path.exists(folder_path) else 0
+            print(f"{i:2d}. {category} ({folder_name}) - {file_count}件")
+        
+        print(f"{len(categories)+1:2d}. メインフォルダを開く")
+        
+        try:
+            choice = int(input(f"\n開きたいフォルダの番号 (1-{len(categories)+1}): "))
+            if 1 <= choice <= len(categories):
+                category = categories[choice-1]
+                folder_name = self.category_folders[category]
+                folder_path = os.path.join(self.output_folder, folder_name)
+                
+                os.startfile(folder_path)
+                print(f"✅ フォルダを開きました: {folder_path}")
+                
+            elif choice == len(categories)+1:
+                os.startfile(self.output_folder)
+                print(f"✅ メインフォルダを開きました: {self.output_folder}")
+            else:
+                print("無効な番号です")
+        except ValueError:
+            print("数字を入力してください")
+        except Exception as e:
+            print(f"❌ フォルダを開けませんでした: {e}")
+
+
+def main():
+    """
+    メイン実行関数
+    """
+    print("=" * 60)
+    print("音声テキスト化＆分類RAGシステム")
+    print("=" * 60)
+    
+    try:
+        rag = VoiceRAGSystem()
+    except Exception as e:
+        print(f"❌ システム初期化エラー: {e}")
+        return
+    
+    while True:
+        print("\n" + "="*40)
+        print("メニュー")
+        print("="*40)
+        print("1. YouTube URLから音声を処理")
+        print("2. 音声ファイルを処理")
+        print("3. テキスト検索")
+        print("4. データベース統計表示")
+        print("5. 文字起こし内容の詳細表示")
+        print("6. カテゴリ別フォルダを開く")
+        print("7. 終了")
+        
+        try:
+            choice = input("\n選択してください (1-7): ").strip()
+            
+            if choice == '1':
+                url = input("YouTube URL を入力してください: ").strip()
+                if url:
+                    rag.process_youtube_url(url)
+            
+            elif choice == '2':
+                file_path = input("音声ファイルのパスを入力してください: ").strip()
+                if file_path:
+                    rag.process_audio_file(file_path)
+            
+            elif choice == '3':
+                query = input("検索クエリを入力してください: ").strip()
+                if query:
+                    rag.search_and_display(query)
+            
+            elif choice == '4':
+                rag.show_database_stats()
+            
+            elif choice == '5':
+                rag.show_transcript_details()
+            
+            elif choice == '6':
+                rag.open_category_folder()
+            
+            elif choice == '7':
+                print("システムを終了します")
+                break
+            
+            else:
+                print("無効な選択です")
+                
+        except KeyboardInterrupt:
+            print("\n\nユーザーによる中断")
+            break
+        except Exception as e:
+            print(f"❌ エラー: {e}")
+
+
+if __name__ == "__main__":
+    main()
